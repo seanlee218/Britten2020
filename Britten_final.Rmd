@@ -1,0 +1,311 @@
+---
+title: 'Reproducing a Paper Pt. II: Britten & Sibert 2020'
+author: "Sean Lee"
+date: "11/23/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## How I found this paper
+
+  After trying to reproduce the Bowen et al. 2017 paper and finding that most if not all the data and code was available online and linked within the paper, it seemed smart to choose another paper from the same journal, Nature Communications.  It seems that Nature requires data and code to be available either upon request or explicitly linked within the paper so I went on the journal website to browse some articles in the current issue.
+  I found this paper "Enhanced fish production during a period of extreme global warmth" written by Gregory L. Britten and Elizabeth C. Silbert from the November issue.  
+  Essentially, there was a period in the earth's history during the early Paleogene era (62-46 Ma) where ocean temperature were significantly higher and they want to model the response of long term fish productivity to elevated global temperatures through analyzing Ichyoliths abundance from sediment cores retrieved from the center of the South Pacific Gyre.  
+  In the study they mention the use of data-contrained modelling which I had never heard of.  They describe the model as fitting an idealized food web model to temporal variations in the ichyolith abundance from the collected core.  Using allometric growth relationships they extrapolate the projected body size to the ichyoliths in the core. Then by segregating the distribution of ichyilith sizes they fit these distributions into size classes fit into a trophic food web model.  The base of this trophic model was used to model the primary production in bins of 1 MY time scales.  Model fitting was performed by running an initial reference solution and observing model misfit between the observed tooth density at given size classes within each MY bin
+  
+## Getting started
+  
+  My goal in this practice is to recreate the figures in this study, in particular Fig. 2 which depicts the 1 MY bins of model fits for ichyilith size distribution against different time varying primary production constrained model fits based on various model constants.
+  
+  I found that the data and code was available on an online respository at zenodo.org:
+  
+  https://zenodo.org/record/4095198#.X7tAclNKiRs
+  
+When I opened the site there were two folders one clearly labeled "data" and one labelled "code".  I created a github repostory and added in these folders containing the data and code.  I saw in the code folder that there was a r script named figures which I opened.
+The first thing I noticed at the top was it set the working directory to:
+
+setwd('d:/dropbox/working/eocene/eocene-productivity-public/')
+
+This line of code gave me an error since this was not what my working directory was on computer.  When I created the project it was from my project specific github repository where I put the code and data into.  My working directory had the code folder so sourcing the different script within the code folder was fine.
+
+```{r, echo=TRUE}
+source('code/process_data.r')
+source('code/trophic_function.r')
+source('code/parameters.r')
+source('code/ss_functions.r')
+```
+
+The next few lines of code are establishing parameters for the model and reading in data.
+
+```{r, echo=TRUE}
+ages   <- unique(size$age)
+cramer <- read.csv('data/cramer_2009_avg.csv')
+
+t_min <- 62
+t_max <- 46
+
+c_age <- cramer$Age_ma 
+c_o18 <- cramer$Pacific_d18O_trend
+c_ind <- which(c_age<t_min & c_age>t_max)
+
+ft <- function(do18){return(16.5 - 5*(do18+1.2) + 0.14*(do18+1.2)^2)}
+```
+
+## Fig. 1a
+
+Fig. 1a depicts rate of ichyilith accumulation plotted with deep water temperature from 62-48 mya.  This figure seeks to demonstrate the positive relationship between deep water temperature and the accumulation rate of ichyilith fossils.
+```{r}
+par(mfrow=c(1,1),cex.axis=0.9,cex.lab=1.0,mar=c(4,4,4,6))
+  plot(ages[ages<=t_min&ages>=t_max],accum$ich_accum[ages<=t_min&ages>=t_max],xlim=c(62,46),bty='n',pch=19,xlab='',ylab='',ylim=c(0,390),xaxt='n')
+    axis(side=1,at=seq(62,46,-2))
+    mtext(side=2,line=2.5,expression('Ichthyolith Accumulation Rate (teeth/cm'^2*'/Myr)'))
+    mtext(side=1,line=2.5,'Myr')
+par(new=TRUE)
+  plot(c_age[c_ind],ft(c_o18[c_ind]) ,xlim=c(62,46),xaxt='n',yaxt='n',xlab='',ylab='',bty='n',
+	cex=1.1,type='l',col='red',ylim=c(9,16))
+      axis(side=4,col='red')
+  legend('topleft',pch=c(19,NA),lty=c(NA,1),col=c('black','red'),legend=c('Ichthyolith Accumulation',expression('Temperature ('*degree*'C)')),bty='n',cex=1.2)
+  mtext(side=4,expression('Deep Water Temperature ('*degree*'C)'),line=2.5)
+```
+## Fig. 1b
+
+Fig. 1b depicts a non-linear regression plotting deep water temp against ichyilith accumulation rate binned in half million year intervals so that each plot on the plot represents the mean accumulation/temp in each of those bins.
+
+The following code seems to be pulling out and creating objects from the overall dataset to input into the non-linear regression as well as creating simple operations for calculating accum and temp within each bin.
+
+```{r, echo=TRUE}
+temp <- read.csv('data/temp-cramer.csv',header=TRUE)
+colnames(temp) <- c('age','temp')
+
+int <- 62
+fin <- 46
+del <- 0.5   
+accumss=accumssd=temps2=temps2sd <- c()
+
+i <- 1
+while(int>fin){
+	tmp <- size[size$age < int & size$age >= int - del,]
+	accumss <- c(accumss,mean(tmp$accum))
+	accumssd <- c(accumssd,sd(tmp$accum))
+	tmp_temp <- temp[temp$age <int & temp$age >= int -del,]
+	temps2 <- c(temps2,mean(tmp_temp$temp))
+	temps2sd <- c(temps2sd,sd(tmp_temp$temp))
+	int <- int - del
+	i <- i + 1
+}
+accumssd[accumssd==0] <- sort(unique(accumssd))[2]
+
+library(mgcv)
+mod  <- gam(accumss ~ temps2 + I(temps2^2))
+xin  <- seq(9,14.5,0.01)
+pred <- predict.gam(mod,newdata=list(temps2=xin),se.fit=TRUE)
+```
+
+The next lines of code set parameters for the plot area using the "par" function and use the objects created in the previous lines of code to construct that non-linear regression and predicted fit lines.
+```{r, echo=TRUE}
+par(mfrow=c(1,1),cex.axis=0.9,cex.lab=1.0,mar=c(4,4,4,4))
+	plot(temps2,accumss,bty='n',pch=19,ylim=c(0,350),xlim=c(9,15),xlab='',ylab='')
+	segments(x0=temps2-temps2sd,x1=temps2+temps2sd,
+			 y0=accumss,y1=accumss,lty=1,lwd=0.5)
+	segments(x0=temps2,x1=temps2,
+			 y0=accumss-accumssd,y1=accumss+accumssd,lty=1,lwd=0.5)
+	lines(xin,pred$fit)
+	lines(xin,pred$fit+2*pred$se.fit,lty=2)
+	lines(xin,pred$fit-2*pred$se.fit,lty=2)
+	mtext(side=1,expression('Deep Water Temperature ('*degree*'C)'),line=2.5)
+    mtext(side=2,line=2.5,expression('Ichthyolith Accumulation Rate (teeth/cm'^2*'/Myr)'))
+```
+## Fig. 2
+
+Fig. 2 is the main figure in the paper and as mentioned above has the observed ichyilith accumulation plotted with model fits of of primary production models with varying constants.
+
+The first part in creating the plots is to actually run the models which the author designates in the figures script as a section named "fit models".
+
+These lines of code create the unbinned fit models for each of the observed variables and there is a nice plot outputted at which shows the change over the 62-46 MY span of the core sample.
+
+```{r, echo=TRUE}
+
+xout <- seq(size_min,size_max,0.01)
+old <- 62
+new <- 46
+i2 <- (b*is+loga)[b*is+loga >size_min & b*is+loga <= size_max]
+
+ages   <- unique(size$age) 
+cramer <- read.csv('data/cramer_2009_avg.csv')
+int <- 62
+fin <- 46
+del <- 1
+
+es_alpha=es_P=es_dfrac=es_sigma=es_const=es_P_alpha=es_alpha_factor=es_P_size <- c()
+
+lens=sds=means_size=sds_size <- numeric()
+
+	while(int>fin){
+	  print(int)
+	  dat     <- size[size$age < int & size$age >= int-del,]
+	  accumm   <- mean(dat$accum)
+	  den     <- density(log(dat$Feret/1000))
+	  y_obs   <- (den$y/sum(den$y))*accumm
+	  x_obs   <- den$x
+	  y_obs_i <- y_obs[x_obs >size_min & x_obs <= size_max]
+	  x_obs_i <- x_obs[x_obs >size_min & x_obs <= size_max]
+	  y_obs_i <- approx(x=x_obs_i,y=y_obs_i, xout=xout)$y
+	 
+	  lens <- c(lens,length(unique(dat$age)))
+	  sds  <- c(sds,sd(dat$accum))
+	 
+	  means_size <- c(means_size,mean(dat$Feret/1000))	
+	  sds_size <- c(sds_size,sd(dat$Feret/1000)) 
+	 
+	  int <- int - del
+	  
+	  alpha_hat <- optimize(f=ss_alpha, c(0,1))
+	  P_hat     <- optimize(f=ss_P,     c(0,1000000))
+	  dfrac_hat <- optimize(f=ss_dfrac, c(0,1))
+	  sigma_hat <- optimize(f=ss_sigma, c(0,2))
+	  P_size_hat<- optimize(f=ss_P_size,c(0,100000))
+	  
+	  alphas <- c(alphas,alpha_hat$minimum)
+	  Ps     <- c(Ps,    P_hat$minimum)
+	  dfracs <- c(dfracs,dfrac_hat$minimum)
+	  sigmas <- c(sigmas,sigma_hat$minimum)
+	  Ps_size<- c(Ps_size,P_size_hat$minimum)
+	  
+	  es_const <- c(es_const,ss_sigma(par=sigma0))
+	  es_alpha <- c(es_alpha,alpha_hat$objective)
+	  es_P     <- c(es_P,    P_hat$objective)
+	  es_dfrac <- c(es_dfrac,dfrac_hat$objective)
+	  es_sigma <- c(es_sigma,sigma_hat$objective)
+	  es_P_size<- c(es_P_size,P_size_hat$objective)
+	  
+	}
+
+t_min <- 62
+t_max <- 46
+
+xins <- seq(62,46,length.out=16)
+par(mfrow=c(3,2),cex.axis=0.9,cex.lab=1.0,mar=c(2,4,2,2),oma=c(2,2,2,2))
+  plot(ages[ages<=t_min&ages>=t_max],accum$ich_accum[ages<=t_min&ages>=t_max],xlim=c(62,46),bty='n',pch=19,xlab='',ylab='',ylim=c(0,390),xaxt='n')
+    axis(side=1,at=seq(62,46,-2))
+    mtext(side=2,line=2.5,expression('Teeth/cm'^2*'/Myr'),cex=0.7)
+par(new=TRUE)
+  plot(c_age[c_ind],ft(c_o18[c_ind]) ,xlim=c(62,46),xaxt='n',yaxt='n',xlab='',ylab='',bty='n',
+	cex=1.1,type='l',col='red',ylim=c(9,16))
+      axis(side=4,col='red')
+  legend('topleft',pch=c(19,NA),lty=c(NA,1),col=c('black','red'),legend=c('Ichthyolith Accumulation',expression('Temperature ('*degree*'C)')),bty='n',cex=1.2)
+
+plot(xins,Ps[-1]/P0,type='b',pch=19,col='blue',bty='n',xlim=c(62,46),xaxt='n',ylim=c(0,1.5),ylab='');  axis(side=1,at=seq(62,46,-2))
+	mtext(side=2,line=2.5,'Primary Production Scale Factor',cex=0.7)
+plot(xins,alphas[-1],pch=19,type='b',col='red',bty='n',xlim=c(62,46),xaxt='n',ylab='');  axis(side=1,at=seq(62,46,-2))
+	mtext(side=2,line=2.5,'Trophic Transfer Efficiency',cex=0.7)
+plot(xins,sigmas[-1],pch=19,type='b',col='orange',bty='n',xlim=c(62,46),xaxt='n',ylab=''); axis(side=1,at=seq(62,46,-2))
+	mtext(side=2,line=2.5,'Prey Size Range',cex=0.7)
+plot(xins,dfracs[-1],pch=19,type='b',col='dark green',bty='n',xlim=c(62,46),xaxt='n',ylab=''); axis(side=1,at=seq(62,46,-2))
+	mtext(side=2,line=2.5,'Mean Prey Range',cex=0.7)
+plot(xins,Ps_size[-1]/P0,type='b',col='purple',bty='n',xlim=c(62,46),xaxt='n',ylab=''); axis(side=1,at=seq(62,46,-2))
+	mtext(side=2,line=2.5,'Size-Dependent Prim. Prod. Factor',cex=0.7)
+mtext(side=1,outer=TRUE,'Myr',line=1)
+```
+
+The next section of the script compiles these fit models along with the observed ichyilith accumulation rate into these 1 MY bins and creates 16-1 MY bin plots depicting changes in these variables against ichyilith accumulation change over these bins.
+
+```{r}
+ylims <- c(0,2.5)
+xlims <- c(-10,-5)
+
+int <- 62; fin <- 46; del <- 1
+i <- 1
+j <- 0
+
+par(mfrow=c(4,4),mar=c(0,0,0,0),oma=c(5,9,5,5),cex.axis=0.9,xpd=TRUE)
+while(int>fin){
+  print(int)
+  dat     <- size[size$age < int & size$age >= int-del,]
+  accum   <- mean(dat$accum)
+  den     <- density(log(dat$Feret/1000),bw=bw)
+  y_obs   <- (den$y/sum(den$y))*accum
+  x_obs   <- den$x
+  y_obs_i <- y_obs[x_obs >size_min & x_obs <= size_max]
+  x_obs_i <- x_obs[x_obs >size_min & x_obs <= size_max]
+  y_obs_i <- approx(x=x_obs_i,y=y_obs_i, xout=xout)$y
+  
+  plot(xout,y_obs_i,xlim=xlims,type='l',ylim=ylims,bty='n',lty=2,lwd=1.5,xaxt='n',yaxt='n')
+  
+  pred_alpha <- f_troph(Ni=input$Ni,is=input$is,P1=P0*input$P1,alpha=alphas[i+1],dfrac=dfrac0,sigma=sigma0)
+  pred_alpha <- pred_alpha[b*is+loga >size_min & b*is+loga <= size_max]
+  pred_alpha <- approx(x=i2,  y=pred_alpha,xout=xout)$y
+  lines(xout,pred_alpha,col='red',lwd=1.5)
+
+  pred_P <- f_troph(Ni=input$Ni,is=input$is,P1=Ps[i+1]*input$P1,alpha=alpha0,dfrac=dfrac0,sigma=sigma0)
+  pred_P <- pred_P[b*is+loga >size_min & b*is+loga <= size_max]
+  pred_P <- approx(x=i2,  y=pred_P,xout=xout)$y
+  lines(xout,pred_P,col='blue',lty=2,lwd=1.5)
+
+  pred_sigma <- f_troph(Ni=input$Ni,is=input$is,P1=P0*input$P1,alpha=alpha0,dfrac=dfrac0,sigma=sigmas[i+1])
+  pred_sigma <- pred_sigma[b*is+loga >size_min & b*is+loga <= size_max]
+  pred_sigma <- approx(x=i2,  y=pred_sigma,xout=xout)$y
+  lines(xout,pred_sigma,col='orange',lwd=1.5)
+
+  pred_dfrac <- f_troph(Ni=input$Ni,is=input$is,P1=P0*input$P1,alpha=alpha0,dfrac=dfracs[i+1],sigma=sigma0)
+  pred_dfrac <- pred_dfrac[b*is+loga >size_min & b*is+loga <= size_max]
+  pred_dfrac <- approx(x=i2,  y=pred_dfrac,xout=xout)$y
+  lines(xout,pred_dfrac,col='dark green',lwd=1.5)
+
+  P_size      <- c(dnorm(c(1:100),mean=-75 + 0.003*Ps_size[i+1],sd=5),rep(0,Ni-100))
+  pred_P_size <- f_troph(Ni=input$Ni,is=input$is,P1=Ps_size[i+1]*P_size,alpha=alpha0,dfrac=dfrac0,sigma=sigma0)
+  pred_P_size <- pred_P_size[b*is+loga >size_min & b*is+loga <= size_max]
+  pred_P_size <- approx(x=i2,  y=pred_P_size,xout=xout)$y
+  lines(xout,pred_P_size,col='purple',lwd=1.5)
+
+  
+  lines(xout,y_obs_i,lty=2,lwd=1.5)
+  
+   if(i%in%c(1,5,9,13)){axis(side=2)}else{axis(side=2,labels=FALSE,tcl=-0.25)}
+   if(i%in%c(13:16)){axis(side=1)}else{axis(side=1,labels=FALSE,tcl=-0.25)}
+   if(i%in%c(4,8,12,16)){axis(side=4,labels=FALSE,tcl=0.25)}
+   
+   legend(-10.5,2.5,legend=c(paste(round(es_P[i],digits=1)),
+							 paste(round(es_alpha[i],digits=1)),
+							 paste(round(es_sigma[i],digits=1)),
+							 paste(round(es_dfrac[i],digits=1)),
+							 paste(round(es_P_size[i],digits=1))),text.col=c('blue','red','orange','dark green','purple'),bty='n')
+ 
+
+ 
+   int <- int - del
+   i <- i + 1
+   box()
+   
+   mtext(paste(int+del,' - ',int+del-del, 'Myr'),adj=0.8,line=-2,cex=0.9)
+  }
+  mtext(side=2,'Productivity Density',outer=TRUE,line=3,cex=1.25)
+  mtext(side=1,'log(Size [m])',outer=TRUE,line=3.5,cex=1.25)
+  
+	par(fig = c(0, 1, 0, 1), oma = c(0,0,0,0), mar = c(0,0,0,0), new = TRUE) 
+	plot(0,0, type = 'n', axes = F, bty = 'n')
+
+	legend(horiz=TRUE,'top',cex=1.2,lwd=1.3,legend=c(''),lty=2,bty='n',y=-1)
+
+	legend(horiz=TRUE,'top',cex=1.2,lwd=1.3,legend=c(expression(italic('Primary Prod. (62.7)')),
+                                      expression(italic('Trophic Transfer (61.9)')),
+                                      expression(italic('Prey Size Range (226.1)')),
+                                      expression(italic('Mean Prey Size (355.2)')),
+									  expression(italic('Size-Dep. Prod. (288.6)'))),
+                   lty=c(1,1,1,1,1),bty='n',col=c('blue','red','orange','dark green','purple'))
+
+  
+  
+ 
+  
+```
+
+## Conclusion
+
+Unlike the last study I chose, Bowen et al. 2017, this study was fresh off the press this year.   I believe that the ability to reproduce these figures simply and running the models hinged on this fact.  If I were to try to reproduce the figures from this study in a few years I fear that some of the packages will have been updated and some of the code syntax updated.  This study demonstrates that more recently published studies have a better chance of being easily reproducible than earlier studies.  
+
+I think that while I do not fully grasp how these models were created that using these scripts as reference I could potentially create similar data-constrained models in the future. These models could be useful in my own research as I could potentially use these same models to predict productivity or predict invasion rate.
+  
+## 
